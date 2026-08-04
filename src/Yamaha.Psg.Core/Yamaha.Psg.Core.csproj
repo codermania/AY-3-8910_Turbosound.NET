@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Yamaha.Psg.Core</PackageId>
+    <Authors>codermania</Authors>
+    <Description>A from-scratch AY-3-8910/YM2149 (PSG) sound chip emulator for .NET 8.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Yamaha.Psg.Core.Tests" />
+  </ItemGroup>
+
+</Project>

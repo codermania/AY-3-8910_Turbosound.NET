@@ -1,0 +1,11 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Yamaha.Psg.Core\Yamaha.Psg.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Yamaha.Psg.Formats.Tests" />
+  </ItemGroup>
+
+</Project>

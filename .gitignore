@@ -1,0 +1,26 @@
+# .NET build output
+bin/
+obj/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# Test results
+TestResults/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (machine-specific permissions, not meant to be shared)
+.claude/settings.local.json
+
+# Real user-provided chiptune files used as ground-truth test fixtures — kept local only.
+# Provenance/licensing notes for each file are in the matching fixtures/SOURCES.md; tests that
+# need these skip gracefully when the files aren't present (see fixtures/SOURCES.md).
+tests/Yamaha.Psg.Formats.Tests/fixtures/user_provided/
+tests/Yamaha.Psg.Regression/fixtures/user_provided/
+docs/ptdoc_pt3_format_ru.txt

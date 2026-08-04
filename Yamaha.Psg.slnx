@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Yamaha.Psg.Core/Yamaha.Psg.Core.csproj" />
+    <Project Path="src/Yamaha.Psg.Formats/Yamaha.Psg.Formats.csproj" />
+    <Project Path="src/Yamaha.Psg.Player/Yamaha.Psg.Player.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Yamaha.Psg.Core.Tests/Yamaha.Psg.Core.Tests.csproj" />
+    <Project Path="tests/Yamaha.Psg.Formats.Tests/Yamaha.Psg.Formats.Tests.csproj" />
+    <Project Path="tests/Yamaha.Psg.Regression/Yamaha.Psg.Regression.csproj" />
+  </Folder>
+</Solution>
