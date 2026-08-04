@@ -1,4 +1,4 @@
-# Yamaha.Psg
+# AY-3-8910/YM2149 Turbosound.NET
 
 A from-scratch, dependency-free C# (.NET 8) emulator for the **AY-3-8910** / **YM2149** (PSG) sound
 chip — the chip behind the ZX Spectrum's AY sound interfaces, the Amstrad CPC, Atari ST, and MSX.
