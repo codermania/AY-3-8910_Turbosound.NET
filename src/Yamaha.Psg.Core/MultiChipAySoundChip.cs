@@ -10,12 +10,30 @@ namespace Yamaha.Psg.Core;
 /// an accurate model of real hardware (see <see cref="Ay8910"/>), and polyphony grows by adding
 /// whole chips rather than stretching a single chip beyond its real 3 channels. <c>chipCount = 1</c>
 /// behaves identically to <see cref="AySoundChip"/>.
+///
+/// Two independent, complementary headroom controls are available for ensembles where several
+/// chips panned the same way can add up past full scale: <see cref="VolumeScaling"/> scales each
+/// chip's own DAC tables down at the source (opt-in, defaults to <see cref="VolumeScaling.None"/>),
+/// while <see cref="MixLimiter"/> controls how the final post-mix range is enforced (opt-in,
+/// defaults to <see cref="MixLimiter.HardClip"/>).
 /// </summary>
 public sealed class MultiChipAySoundChip
 {
     private readonly AySoundChip[] _chips;
+    private readonly MixLimiter _mixLimiter;
 
-    public MultiChipAySoundChip(int outputSampleRate, PanningPreset panning, params ChipConfig[] chipConfigs)
+    /// <summary>
+    /// The designated constructor — every other overload chains here. Takes both post-mix
+    /// (<paramref name="mixLimiter"/>) and at-the-source (<paramref name="volumeScaling"/>) headroom
+    /// controls explicitly. This is a distinct overload from the older
+    /// <c>(outputSampleRate, panning, mixLimiter, params chipConfigs)</c> one (rather than adding
+    /// <paramref name="volumeScaling"/> as a new parameter to it) specifically so that existing calls
+    /// like <c>new MultiChipAySoundChip(rate, panning, MixLimiter.SoftLimit, cfg1, cfg2)</c> keep
+    /// compiling unchanged — inserting a required-by-position parameter ahead of an existing
+    /// <c>params</c> array would silently break any call that relies on positional
+    /// <c>ChipConfig</c> arguments landing in that array.
+    /// </summary>
+    public MultiChipAySoundChip(int outputSampleRate, PanningPreset panning, MixLimiter mixLimiter, VolumeScaling volumeScaling, params ChipConfig[] chipConfigs)
     {
         if (chipConfigs is null || chipConfigs.Length == 0)
         {
@@ -24,17 +42,44 @@ public sealed class MultiChipAySoundChip
 
         OutputSampleRate = outputSampleRate;
         ChipCount = chipConfigs.Length;
+        _mixLimiter = mixLimiter;
+
+        double volumeScale = volumeScaling switch
+        {
+            VolumeScaling.DivideByChipCount => 1.0 / ChipCount,
+            VolumeScaling.DivideBySqrtChipCount => 1.0 / Math.Sqrt(ChipCount),
+            _ => 1.0,
+        };
 
         _chips = new AySoundChip[ChipCount];
         for (int i = 0; i < ChipCount; i++)
         {
-            _chips[i] = new AySoundChip(chipConfigs[i].Variant, chipConfigs[i].ClockHz, outputSampleRate, panning);
+            _chips[i] = new AySoundChip(chipConfigs[i].Variant, chipConfigs[i].ClockHz, outputSampleRate, panning, volumeScale: volumeScale);
         }
     }
 
+    /// <summary>Same as the designated constructor, defaulting to <see cref="VolumeScaling.None"/> — today's original behavior.</summary>
+    public MultiChipAySoundChip(int outputSampleRate, PanningPreset panning, MixLimiter mixLimiter, params ChipConfig[] chipConfigs)
+        : this(outputSampleRate, panning, mixLimiter, VolumeScaling.None, chipConfigs)
+    {
+    }
+
+    /// <summary>Same as the designated constructor, defaulting to <see cref="MixLimiter.HardClip"/> and <see cref="VolumeScaling.None"/> — today's original behavior.</summary>
+    public MultiChipAySoundChip(int outputSampleRate, PanningPreset panning, params ChipConfig[] chipConfigs)
+        : this(outputSampleRate, panning, MixLimiter.HardClip, VolumeScaling.None, chipConfigs)
+    {
+    }
+
     /// <summary>Convenience constructor for the most common case — <paramref name="chipCount"/> identical chips.</summary>
-    public MultiChipAySoundChip(int chipCount, ChipVariant variant, int clockHz, int outputSampleRate, PanningPreset panning = PanningPreset.Abc)
-        : this(outputSampleRate, panning, CreateUniformConfigs(chipCount, variant, clockHz))
+    public MultiChipAySoundChip(
+        int chipCount,
+        ChipVariant variant,
+        int clockHz,
+        int outputSampleRate,
+        PanningPreset panning = PanningPreset.Abc,
+        MixLimiter mixLimiter = MixLimiter.HardClip,
+        VolumeScaling volumeScaling = VolumeScaling.None)
+        : this(outputSampleRate, panning, mixLimiter, volumeScaling, CreateUniformConfigs(chipCount, variant, clockHz))
     {
     }
 
@@ -64,7 +109,13 @@ public sealed class MultiChipAySoundChip
     /// Renders <paramref name="frameCount"/> stereo pairs, summing the contribution of every chip
     /// in the ensemble. Each chip is rendered (and clipped) independently through
     /// <see cref="AySoundChip.RenderSamples"/> at its own rate, after which the results are summed
-    /// and clipped again — the same documented "hard clipping" simplification as the single-chip facade.
+    /// and the range is enforced again per the constructor's <see cref="MixLimiter"/> choice — by
+    /// default (<see cref="MixLimiter.HardClip"/>) this is the same "hard clipping" simplification
+    /// as the single-chip facade; <see cref="MixLimiter.SoftLimit"/> compresses instead of truncating
+    /// when several chips panned the same way add up past full scale (see
+    /// <see cref="StereoMixer.SoftLimitToShortRange"/>). See TODO.md for a related, separate
+    /// simplification this doesn't address: each chip's own contribution is already hard-clipped to
+    /// short range before it ever reaches this sum.
     /// </summary>
     public int RenderSamples(short[] outputBuffer, int frameCount, IReadOnlyList<TimedRegisterWrite>?[]? scheduledWritesPerChip = null)
     {
@@ -94,12 +145,16 @@ public sealed class MultiChipAySoundChip
 
         for (int f = 0; f < frameCount; f++)
         {
-            outputBuffer[f * 2] = StereoMixer.ClampToShortRange(mixLeft[f]);
-            outputBuffer[(f * 2) + 1] = StereoMixer.ClampToShortRange(mixRight[f]);
+            outputBuffer[f * 2] = ApplyLimiter(mixLeft[f]);
+            outputBuffer[(f * 2) + 1] = ApplyLimiter(mixRight[f]);
         }
 
         return frameCount;
     }
+
+    private short ApplyLimiter(double pcmScaleValue) => _mixLimiter == MixLimiter.SoftLimit
+        ? StereoMixer.SoftLimitToShortRange(pcmScaleValue)
+        : StereoMixer.ClampToShortRange(pcmScaleValue);
 
     private AySoundChip Chip(int index)
     {

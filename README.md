@@ -53,7 +53,16 @@ tests/
   custom per-channel left/right gain.
 - **Multi-chip / TurboSound-style polyphony**: `MultiChipAySoundChip` runs N independent, fully
   accurate `Ay8910` instances in parallel (the same way real TurboSound hardware mods work) instead
-  of faking a wider single chip — `chipCount = 1` behaves exactly like `AySoundChip`.
+  of faking a wider single chip — `chipCount = 1` behaves exactly like `AySoundChip`. Two
+  complementary, opt-in headroom controls are available for ensembles where several chips panned
+  the same way would otherwise add up into harsh digital clipping (both default to today's
+  unchanged behavior for existing consumers):
+  - `VolumeScaling.DivideByChipCount` / `DivideBySqrtChipCount` scales every chip's own DAC tables
+    down *before* rendering, so the headroom is there at the source (÷N never clips even in the
+    worst case; ÷√N is louder in the typical case, at the cost of rare synced peaks still needing
+    the limiter below).
+  - `MixLimiter.SoftLimit` compresses the final post-mix signal instead of hard-cutting it, as a
+    downstream safety net.
 - **File format support**:
   - **`.PSG`** — the simple, uncompressed per-frame register dump used by ZX Spectrum emulators and
     exported directly by Vortex Tracker II.
@@ -132,6 +141,11 @@ var buffer = new short[44_100 * 2];
 multi.RenderSamples(buffer, frameCount: 44_100);
 ```
 
+Pass `mixLimiter: MixLimiter.SoftLimit` and/or `volumeScaling: VolumeScaling.DivideByChipCount` to
+either constructor if multiple chips panned the same way end up clipping harshly when summed — both
+default to today's original, unchanged behavior (`MixLimiter.HardClip`, `VolumeScaling.None`) for
+existing consumers.
+
 ### The demo CLI
 
 ```bash
@@ -167,10 +181,6 @@ tests that need them skip gracefully if the files aren't present locally.
 
 ## Design notes
 
-- `Yamaha.Psg.Core` intentionally has no dependencies of any kind, so it can be referenced directly
-  from a Godot 4 (GodotSharp, net8.0) project without pulling anything else in.
-- `AySoundChip.RenderSamples` takes a stereo-pair frame count, matching the "pull" model of Godot's
-  `AudioStreamGeneratorPlayback` — a future Godot wrapper should be a thin adapter, not a rewrite.
 - Every file-format reader (`PsgFileReader`, `VtxFileReader`, `Pt3FileReader`) produces the exact
   same `IRegisterDumpPlayer` shape (a metadata block + a sequence of 14-register frames), so
   `FileDrivenPlaybackDriver` and everything downstream doesn't care which format it came from.
@@ -181,6 +191,11 @@ tests that need them skip gracefully if the files aren't present locally.
 - `.AY` (ZXAYEMUL) is intentionally out of scope: it's a Z80 program + memory image that has to
   actually be *executed* to produce register writes, not a dump — a materially different (and much
   larger) undertaking than reading a file format.
+- See [TODO.md](TODO.md) for known simplifications not yet addressed — currently, each chip in a
+  `MultiChipAySoundChip` ensemble is already hard-clipped to 16-bit range on its own before the
+  ensemble sums them, ahead of whichever `MixLimiter`/`VolumeScaling` is chosen. `VolumeScaling`
+  mitigates this in practice (it lowers each chip's own output before that per-chip clip can even
+  fire) but doesn't eliminate the underlying double-clip architecture.
 
 ## License
 

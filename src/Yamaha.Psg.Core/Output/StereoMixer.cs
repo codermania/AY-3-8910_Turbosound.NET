@@ -72,4 +72,29 @@ public sealed class StereoMixer
         if (pcmScaleValue <= short.MinValue) return short.MinValue;
         return (short)Math.Round(pcmScaleValue);
     }
+
+    /// <summary>
+    /// Same PCM-scale contract as <see cref="ClampToShortRange"/>, but instead of a hard cutoff,
+    /// values beyond a knee just below <see cref="short.MaxValue"/> are compressed towards the
+    /// boundary with a tanh curve instead of being truncated — used by
+    /// <see cref="MultiChipAySoundChip"/>'s opt-in <c>MixLimiter.SoftLimit</c> mode, for ensembles
+    /// where several chips panned to the same side can otherwise add up into harsh digital clipping.
+    /// Below the knee this is bit-identical to <see cref="ClampToShortRange"/> — quiet material is
+    /// completely unaffected. The curve is applied to the magnitude and reapplied with the original
+    /// sign, so it is symmetric for negative samples.
+    /// </summary>
+    public static short SoftLimitToShortRange(double pcmScaleValue)
+    {
+        const double knee = 0.9 * short.MaxValue;
+        const double headroom = short.MaxValue - knee;
+
+        double magnitude = Math.Abs(pcmScaleValue);
+        if (magnitude <= knee)
+        {
+            return (short)Math.Round(pcmScaleValue);
+        }
+
+        double compressedMagnitude = knee + (headroom * Math.Tanh((magnitude - knee) / headroom));
+        return ClampToShortRange(Math.Sign(pcmScaleValue) * compressedMagnitude);
+    }
 }

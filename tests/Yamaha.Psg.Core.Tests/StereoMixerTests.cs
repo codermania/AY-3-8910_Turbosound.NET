@@ -79,4 +79,48 @@ public class StereoMixerTests
         Assert.Equal(short.MaxValue, left);
         Assert.Equal((short)0, right);
     }
+
+    [Theory]
+    [InlineData(0.0)]
+    [InlineData(15000.0)]
+    [InlineData(-15000.0)]
+    [InlineData(29490.0)] // just under the 0.9 * short.MaxValue knee
+    public void SoftLimitToShortRange_BelowTheKnee_IsBitIdenticalToHardClamp(double pcmScaleValue)
+    {
+        Assert.Equal(StereoMixer.ClampToShortRange(pcmScaleValue), StereoMixer.SoftLimitToShortRange(pcmScaleValue));
+    }
+
+    [Fact]
+    public void SoftLimitToShortRange_ModestOvershoot_CompressesTowardsButNeverReachesFullScale()
+    {
+        // A modest overshoot past the knee — not so extreme that tanh's asymptote rounds away to
+        // exactly short.MaxValue once quantized to an integer sample (that's expected once the
+        // input is many headroom-widths past the knee; see the "extreme input" test below).
+        const double pcmScaleValue = 35_000.0;
+        short result = StereoMixer.SoftLimitToShortRange(pcmScaleValue);
+
+        Assert.True(result < short.MaxValue, $"Expected {result} < {short.MaxValue} — soft limiting should approach full scale, not reach it.");
+        Assert.True(result > 0.9 * short.MaxValue); // still well above the knee — not silenced
+
+        short hardClipped = StereoMixer.ClampToShortRange(pcmScaleValue);
+        Assert.True(result < hardClipped, "The soft-limited result should sit below where hard clipping would have truncated to.");
+    }
+
+    [Theory]
+    [InlineData(50_000.0)]
+    [InlineData(1_000_000.0)]
+    public void SoftLimitToShortRange_IsSymmetricForNegativeSamples(double magnitude)
+    {
+        short positive = StereoMixer.SoftLimitToShortRange(magnitude);
+        short negative = StereoMixer.SoftLimitToShortRange(-magnitude);
+
+        Assert.Equal(-positive, negative);
+    }
+
+    [Fact]
+    public void SoftLimitToShortRange_NeverExceedsShortRange_EvenForExtremeInput()
+    {
+        Assert.Equal(short.MaxValue, StereoMixer.SoftLimitToShortRange(double.MaxValue / 2));
+        Assert.Equal(-short.MaxValue, StereoMixer.SoftLimitToShortRange(-double.MaxValue / 2));
+    }
 }

@@ -16,13 +16,33 @@ public sealed class Ay8910
     private readonly double[] _envelopeDac;
     private readonly double[] _fixedVolumeDac;
 
-    public Ay8910(ChipVariant variant, int clockHz)
+    /// <param name="volumeScale">
+    /// Uniform factor applied to both DAC tables before storing them (see
+    /// <see cref="Yamaha.Psg.Core.Output.MixLimiter"/>'s sibling mechanism <see cref="VolumeScaling"/>
+    /// on <see cref="MultiChipAySoundChip"/>, which is what actually computes this from an ensemble's
+    /// chip count). Both tables are scaled together, even on YM2149 where they aren't literally the
+    /// same array (see docs/DAC_TABLES.md) — otherwise the envelope path would keep the old ceiling
+    /// while the fixed-volume path got the new one. Default 1.0 leaves every value exactly as it
+    /// was (multiplying by 1.0 is exact in IEEE-754, so this is bit-identical to not scaling at all).
+    /// </param>
+    public Ay8910(ChipVariant variant, int clockHz, double volumeScale = 1.0)
     {
         Variant = variant;
         ClockHz = clockHz;
         _envelope = new EnvelopeGenerator(variant);
-        _envelopeDac = DacTables.EnvelopeLevels(variant);
-        _fixedVolumeDac = DacTables.FixedVolumeLevels(variant);
+        _envelopeDac = Scale(DacTables.EnvelopeLevels(variant), volumeScale);
+        _fixedVolumeDac = Scale(DacTables.FixedVolumeLevels(variant), volumeScale);
+    }
+
+    private static double[] Scale(double[] source, double factor)
+    {
+        var scaled = new double[source.Length];
+        for (int i = 0; i < source.Length; i++)
+        {
+            scaled[i] = source[i] * factor;
+        }
+
+        return scaled;
     }
 
     public ChipVariant Variant { get; }

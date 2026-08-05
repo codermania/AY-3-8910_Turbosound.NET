@@ -136,6 +136,51 @@ public class Ay8910Tests
     }
 
     [Fact]
+    public void VolumeScale_Default_IsBitIdenticalToExplicitOne()
+    {
+        var implicitScale = new Ay8910(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum);
+        var explicitScale = new Ay8910(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, volumeScale: 1.0);
+
+        foreach (var ay in new[] { implicitScale, explicitScale })
+        {
+            ay.WriteRegister(7, 0b0011_1001); // gate always open
+            ay.WriteRegister(8, 0x0F);
+            ay.Tick();
+        }
+
+        Assert.Equal(DacTables.AyEnvelopeLevels[15], implicitScale.SampleChannelLevels().A);
+        Assert.Equal(implicitScale.SampleChannelLevels().A, explicitScale.SampleChannelLevels().A);
+    }
+
+    [Fact]
+    public void VolumeScale_ScalesFixedVolumeLevel_ByExactFactor()
+    {
+        var ay = new Ay8910(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, volumeScale: 0.5);
+        ay.WriteRegister(7, 0b0011_1001); // gate always open
+        ay.WriteRegister(8, 0x0A); // fixed volume 10, no envelope
+
+        ay.Tick();
+
+        Assert.Equal(DacTables.AyEnvelopeLevels[10] * 0.5, ay.SampleChannelLevels().A, precision: 12);
+    }
+
+    [Fact]
+    public void VolumeScale_AlsoScalesEnvelopeLevel_NotJustFixedVolume()
+    {
+        // YM2149 specifically: FixedVolumeLevels isn't literally the same array as EnvelopeLevels
+        // (see DacTables.cs) — the envelope path must still get the same protection.
+        var ay = new Ay8910(ChipVariant.Ym2149, PsgClockPresets.ZxSpectrum, volumeScale: 0.25);
+        ay.WriteRegister(7, 0b0011_1001); // gate always open
+        ay.WriteRegister(8, 0x10); // envelope-enable
+        ay.WriteRegister(11, 1);
+        ay.WriteRegister(13, 0x0C);
+
+        ay.Tick();
+
+        Assert.Equal(DacTables.YmEnvelopeLevels[ay.EnvelopeLevel] * 0.25, ay.SampleChannelLevels().A, precision: 12);
+    }
+
+    [Fact]
     public void NaiveMonoPcm_SmokeTest_ProducesBoundedNonSilentSamples()
     {
         // Milestone-3 smoke test: naive decimation (no band-limiting filter yet — that's milestone

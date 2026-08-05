@@ -14,11 +14,16 @@ public sealed class AySoundChip
 {
     private readonly StereoMixer _mixer;
     private readonly SubFrameEventQueue _eventQueue = new();
+    private readonly double _volumeScale;
     private Ay8910 _chip;
     private SampleRateConverter _leftConverter;
     private SampleRateConverter _rightConverter;
     private SampleRateConverter _monoConverter;
 
+    /// <param name="volumeScale">
+    /// Forwarded to <see cref="Ay8910"/>'s own <c>volumeScale</c> — see its remarks. Default 1.0 is
+    /// bit-identical to not scaling at all. Preserved across <see cref="Reset"/>.
+    /// </param>
     public AySoundChip(
         ChipVariant variant,
         int clockHz,
@@ -26,16 +31,18 @@ public sealed class AySoundChip
         PanningPreset panning = PanningPreset.Abc,
         ChannelPan? customA = null,
         ChannelPan? customB = null,
-        ChannelPan? customC = null)
+        ChannelPan? customC = null,
+        double volumeScale = 1.0)
     {
         Variant = variant;
         ClockHz = clockHz;
         OutputSampleRate = outputSampleRate;
+        _volumeScale = volumeScale;
 
         _mixer = new StereoMixer();
         ApplyPanning(panning, customA, customB, customC);
 
-        _chip = new Ay8910(variant, clockHz);
+        _chip = new Ay8910(variant, clockHz, volumeScale);
         _leftConverter = new SampleRateConverter(clockHz, outputSampleRate);
         _rightConverter = new SampleRateConverter(clockHz, outputSampleRate);
         _monoConverter = new SampleRateConverter(clockHz, outputSampleRate);
@@ -53,10 +60,10 @@ public sealed class AySoundChip
 
     public byte ReadRegister(int register) => _chip.ReadRegister(register);
 
-    /// <summary>Fully resets the chip and resampler state (equivalent to a fresh power-on).</summary>
+    /// <summary>Fully resets the chip and resampler state (equivalent to a fresh power-on). Preserves the configured volume scale.</summary>
     public void Reset()
     {
-        _chip = new Ay8910(Variant, ClockHz);
+        _chip = new Ay8910(Variant, ClockHz, _volumeScale);
         _leftConverter = new SampleRateConverter(ClockHz, OutputSampleRate);
         _rightConverter = new SampleRateConverter(ClockHz, OutputSampleRate);
         _monoConverter = new SampleRateConverter(ClockHz, OutputSampleRate);

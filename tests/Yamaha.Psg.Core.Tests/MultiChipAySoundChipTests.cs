@@ -208,4 +208,216 @@ public class MultiChipAySoundChipTests
     {
         Assert.Throws<ArgumentException>(() => new MultiChipAySoundChip(44_100, PanningPreset.Abc));
     }
+
+    [Fact]
+    public void MixLimiter_DefaultsToHardClip_UnchangedFromPriorBehavior()
+    {
+        // Two chips, each at max volume on a single channel with Mono panning: AyFixedVolumeLevels[15]
+        // is exactly 1.0, so each chip's own contribution is already exactly short.MaxValue on its
+        // own — summing two of those is guaranteed to overflow, deterministically, with no dependence
+        // on DAC curve specifics.
+        var defaultCtor = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono);
+        var explicitHardClip = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip);
+
+        foreach (var multi in new[] { defaultCtor, explicitHardClip })
+        {
+            multi.WriteRegister(0, 7, 0x3F);
+            multi.WriteRegister(0, 8, 0x0F);
+            multi.WriteRegister(1, 7, 0x3F);
+            multi.WriteRegister(1, 8, 0x0F);
+        }
+
+        var defaultBuffer = new short[200 * 2];
+        var explicitBuffer = new short[200 * 2];
+        defaultCtor.RenderSamples(defaultBuffer, 200);
+        explicitHardClip.RenderSamples(explicitBuffer, 200);
+
+        Assert.Equal(explicitBuffer, defaultBuffer);
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(short.MaxValue, defaultBuffer[i * 2]); // truncated exactly at the boundary
+        }
+    }
+
+    [Fact]
+    public void MixLimiter_SoftLimit_CompressesInsteadOfTruncating_WhenChipsSaturateTogether()
+    {
+        // Chip 0 at max volume (level 1.0, i.e. already exactly short.MaxValue on its own) plus chip
+        // 1 at a modest volume: the sum overshoots short.MaxValue only modestly (~34.3k), same
+        // regime as the direct StereoMixer.SoftLimitToShortRange unit tests. A much larger overshoot
+        // (e.g. two chips both at max, ~65.5k) pushes tanh's argument far enough that it numerically
+        // saturates to 1.0 once quantized to an integer sample, making hard-clip and soft-limit
+        // indistinguishable — this deliberately stays inside the range where they visibly differ.
+        var hardClip = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip);
+        var softLimit = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.SoftLimit);
+
+        foreach (var multi in new[] { hardClip, softLimit })
+        {
+            multi.WriteRegister(0, 7, 0x3F);
+            multi.WriteRegister(0, 8, 0x0F); // chip 0: max volume
+            multi.WriteRegister(1, 7, 0x3F);
+            multi.WriteRegister(1, 8, 0x05); // chip 1: modest volume — just enough combined overshoot
+        }
+
+        var hardBuffer = new short[200 * 2];
+        var softBuffer = new short[200 * 2];
+        hardClip.RenderSamples(hardBuffer, 200);
+        softLimit.RenderSamples(softBuffer, 200);
+
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(short.MaxValue, hardBuffer[i * 2]); // hard-clip truncates exactly at the boundary
+            Assert.True(softBuffer[i * 2] < short.MaxValue, "Soft limiting should compress towards full scale rather than truncate at it.");
+            Assert.True(softBuffer[i * 2] > 0);
+        }
+    }
+
+    [Fact]
+    public void VolumeScaling_DivideByChipCount_KeepsSubMaxVolumeEnsembleBelowFullScale_UnlikeUnscaled()
+    {
+        const int chipCount = 4;
+        var unscaled = new MultiChipAySoundChip(chipCount, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip, VolumeScaling.None);
+        var scaled = new MultiChipAySoundChip(chipCount, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip, VolumeScaling.DivideByChipCount);
+
+        for (int i = 0; i < chipCount; i++)
+        {
+            unscaled.WriteRegister(i, 7, 0x3F); // gate always open
+            unscaled.WriteRegister(i, 8, 0x0A); // loud, but not maxed, fixed volume
+            scaled.WriteRegister(i, 7, 0x3F);
+            scaled.WriteRegister(i, 8, 0x0A);
+        }
+
+        var unscaledBuffer = new short[200 * 2];
+        var scaledBuffer = new short[200 * 2];
+        unscaled.RenderSamples(unscaledBuffer, 200);
+        scaled.RenderSamples(scaledBuffer, 200);
+
+        // Reference: one lone, unscaled chip at the same volume — DivideByChipCount is designed so
+        // that N identical chips scaled by 1/N sum back to roughly this same single-chip loudness.
+        var referenceSingle = new AySoundChip(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono);
+        referenceSingle.WriteRegister(7, 0x3F);
+        referenceSingle.WriteRegister(8, 0x0A);
+        var referenceBuffer = new short[200 * 2];
+        referenceSingle.RenderSamples(referenceBuffer, 200);
+
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(short.MaxValue, unscaledBuffer[i * 2]); // 4 loud chips, unscaled -> clips
+            Assert.True(scaledBuffer[i * 2] < short.MaxValue);   // same registers, scaled -> real headroom, no clip
+
+            // Small tolerance: each chip's own DAC output rounds to a short independently before
+            // the ensemble sums them (see TODO.md), so 4 independent roundings can differ from the
+            // single-chip reference by a couple of PCM units — not exact equality.
+            Assert.InRange(scaledBuffer[i * 2], (short)(referenceBuffer[i * 2] - 3), (short)(referenceBuffer[i * 2] + 3));
+        }
+    }
+
+    [Fact]
+    public void VolumeScaling_DivideBySqrtChipCount_IsLouderThanDivideByChipCount_ForMultipleChips()
+    {
+        const int chipCount = 4;
+        var byCount = new MultiChipAySoundChip(chipCount, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip, VolumeScaling.DivideByChipCount);
+        var bySqrt = new MultiChipAySoundChip(chipCount, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip, VolumeScaling.DivideBySqrtChipCount);
+
+        for (int i = 0; i < chipCount; i++)
+        {
+            byCount.WriteRegister(i, 7, 0x3F);
+            byCount.WriteRegister(i, 8, 0x08);
+            bySqrt.WriteRegister(i, 7, 0x3F);
+            bySqrt.WriteRegister(i, 8, 0x08);
+        }
+
+        var countBuffer = new short[200 * 2];
+        var sqrtBuffer = new short[200 * 2];
+        byCount.RenderSamples(countBuffer, 200);
+        bySqrt.RenderSamples(sqrtBuffer, 200);
+
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.True(sqrtBuffer[i * 2] > countBuffer[i * 2], "DivideBySqrtChipCount should be louder than DivideByChipCount for the same registers.");
+        }
+    }
+
+    [Fact]
+    public void VolumeScaling_None_IsDefault_AndBitIdenticalToOmittingIt()
+    {
+        var withDefault = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono);
+        var explicitNone = new MultiChipAySoundChip(2, ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, MixLimiter.HardClip, VolumeScaling.None);
+
+        foreach (var multi in new[] { withDefault, explicitNone })
+        {
+            multi.WriteRegister(0, 7, 0x3F);
+            multi.WriteRegister(0, 8, 0x0A);
+            multi.WriteRegister(1, 7, 0x3F);
+            multi.WriteRegister(1, 8, 0x0A);
+        }
+
+        var defaultBuffer = new short[200 * 2];
+        var explicitBuffer = new short[200 * 2];
+        withDefault.RenderSamples(defaultBuffer, 200);
+        explicitNone.RenderSamples(explicitBuffer, 200);
+
+        Assert.Equal(explicitBuffer, defaultBuffer);
+    }
+
+    [Fact]
+    public void DesignatedConstructor_WithExplicitMixLimiterAndVolumeScaling_ViaChipConfigs()
+    {
+        var multi = new MultiChipAySoundChip(
+            44_100,
+            PanningPreset.Mono,
+            MixLimiter.SoftLimit,
+            VolumeScaling.DivideByChipCount,
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum),
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum));
+
+        Assert.Equal(2, multi.ChipCount);
+    }
+
+    [Fact]
+    public void OlderThreeAndFourArgOverloads_StillResolveToParamsArray_NotVolumeScaling()
+    {
+        // The exact scenario the API design needed to protect: calling the pre-existing
+        // (rate, panning, mixLimiter, params configs) overload with several ChipConfig arguments
+        // must keep landing them in chipConfigs — not fail to compile or bind to the newer
+        // 5-parameter designated constructor's volumeScaling slot.
+        var viaMixLimiterOverload = new MultiChipAySoundChip(
+            44_100,
+            PanningPreset.Mono,
+            MixLimiter.SoftLimit,
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum),
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum));
+
+        var viaBackCompatOverload = new MultiChipAySoundChip(
+            44_100,
+            PanningPreset.Mono,
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum),
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum));
+
+        Assert.Equal(2, viaMixLimiterOverload.ChipCount);
+        Assert.Equal(2, viaBackCompatOverload.ChipCount);
+    }
+
+    [Fact]
+    public void MixLimiter_ViaChipConfigConstructor_AlsoDefaultsToHardClip()
+    {
+        var multi = new MultiChipAySoundChip(
+            44_100,
+            PanningPreset.Mono,
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum),
+            new ChipConfig(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum));
+
+        multi.WriteRegister(0, 7, 0x3F);
+        multi.WriteRegister(0, 8, 0x0F);
+        multi.WriteRegister(1, 7, 0x3F);
+        multi.WriteRegister(1, 8, 0x0F);
+
+        var buffer = new short[200 * 2];
+        multi.RenderSamples(buffer, 200);
+
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(short.MaxValue, buffer[i * 2]);
+        }
+    }
 }

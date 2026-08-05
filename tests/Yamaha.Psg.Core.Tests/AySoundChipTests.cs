@@ -128,4 +128,40 @@ public class AySoundChipTests
 
         Assert.Equal(0, chip.ReadRegister(8));
     }
+
+    [Fact]
+    public void VolumeScale_HalvesSteadyStateOutput()
+    {
+        var halved = new AySoundChip(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, volumeScale: 0.5);
+        halved.WriteRegister(7, 0x3F); // gate always open
+        halved.WriteRegister(8, 0x0F); // max volume: level 1.0 before scaling
+
+        var buffer = new short[200 * 2];
+        halved.RenderSamples(buffer, 200);
+
+        short expected = StereoMixer.ToShort(0.5); // 1.0 (max level) * 0.5 (volumeScale)
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(expected, buffer[i * 2]);
+        }
+    }
+
+    [Fact]
+    public void Reset_PreservesConfiguredVolumeScale()
+    {
+        var chip = new AySoundChip(ChipVariant.Ay_3_8910, PsgClockPresets.ZxSpectrum, 44_100, PanningPreset.Mono, volumeScale: 0.5);
+
+        chip.Reset(); // must not silently revert volumeScale back to 1.0
+        chip.WriteRegister(7, 0x3F);
+        chip.WriteRegister(8, 0x0F);
+
+        var buffer = new short[200 * 2];
+        chip.RenderSamples(buffer, 200);
+
+        short expected = StereoMixer.ToShort(0.5);
+        for (int i = 50; i < 200; i++)
+        {
+            Assert.Equal(expected, buffer[i * 2]);
+        }
+    }
 }
