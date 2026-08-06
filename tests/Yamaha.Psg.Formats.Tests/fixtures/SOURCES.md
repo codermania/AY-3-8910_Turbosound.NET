@@ -52,6 +52,16 @@ R6 (noise) and R11/R12 (envelope period) diverge at all** - every other register
 confirms both open issues are real, recurring bugs (not anomalies) worth a proper fix once the correct
 general rule is found - see docs/PT3_TABLES.md. Same legal reasoning as the files above.
 
+## `user_provided/CjSplinter, MmcM - Stellar one (2011) (DiHalt 2011, 1).pt3`
+Provided by the user for milestone 11.5 (TS/TurboSound support). A real 2-module TS container -
+confirmed by reading the trailer directly: `Type1="PT3!"`, `Size1=5495`, `Type2="PT3!"`, `Size2=8002`,
+`TSID="02TS"`, and `Size1 + Size2 + 16 (trailer) == 13513` (the file's exact total length) - both
+module sizes precisely account for the whole file with no gap or padding, confirming the trailer's
+`Size` fields are each module's own byte length, not some other quantity. Both halves are complete,
+independent "Vortex Tracker II 1.0 module: ..." headers (titled "stellar I"/"Stellar I", by
+CjSplin7er &amp; MmcM, DiHalt 2011). Used to build and test `Pt3TsFileReader`. No ground-truth `.psg`
+pair yet for this one (the user may supply per-chip exports later for verification).
+
 ## `user_provided/Pator - Digital Espresso (2023) (Revision 2023, 12).pt3` / `.psg`
 Provided by the user - first ground-truth pair from a different composer/tool: header
 `"ProTracker 3.7 compilation of..."`, `Version=7` (matching `EA - Proudly Loneliness`'s dialect, the
